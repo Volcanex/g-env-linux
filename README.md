@@ -48,4 +48,5 @@ systemctl start genv-sync.service    # sync now
 
 ## License
 
-[PolyForm Noncommercial 1.0.0](LICENSE).
+Copyright (C) 2026 Gabriel Penman. Licensed under the
+[GNU Affero General Public License v3.0 only](LICENSE).

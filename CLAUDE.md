@@ -59,7 +59,7 @@ Force a sync now: `systemctl start genv-sync.service`
   are in `.pulse/state/cron-runs.json`.
 - `claude/settings.local.linux.json`: default server Claude Code settings (copied to
   `~/.claude/settings.local.json` on first bootstrap, then owned locally).
-- `LICENSE`: PolyForm Noncommercial 1.0.0.
+- `LICENSE`: GNU AGPL v3.0 only.
 
 ## Units the instance installs
 
