@@ -1,0 +1,14 @@
+[Unit]
+Description=Pull genv updates and re-run bootstrap
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+User=__USER__
+ExecStart=/bin/bash -c '\
+  git -C __GENV_DIR__ pull --ff-only --quiet && \
+  bash __GENV_DIR__/bootstrap-base.sh && \
+  { bash __GENV_LINUX_DIR__/scripts/post-sync.sh 2>/dev/null; true; }'
+StandardOutput=journal
+StandardError=journal

@@ -1,0 +1,138 @@
+#!/usr/bin/env python3
+"""Nightly offsite backup: the instance's directories and sqlite DBs -> an rclone remote.
+
+What to carry is the instance's: `backup.json` in the instance (gp-core) that
+g-env's bin/g-instance names. It lists the directories (`optional` ones may be
+absent), the sqlite DBs, the local tarball root, the rclone config and the remote.
+With no instance or no list the run fails, so systemd shows it.
+
+Runs as root, to read root-owned DBs and docker volumes. Flow: stage a dated
+snapshot -> tar.gz -> rclone copy to the remote -> prune remote (>30d) and local
+(keep last 3). Exits non-zero on any failure so the systemd unit shows as failed.
+
+Restore: rclone copy <remote>/g-backup-<date>.tar.gz <dest> --config <rclone_config>
+--s3-no-check-bucket, then tar xzf. On R2 every rclone call needs
+--s3-no-check-bucket, or a bucket-scoped token gets a 403 on the bucket-exists
+preflight. Directories restore as plain trees under their names, and the DBs are
+ready-to-use sqlite files in db/. Check them with PRAGMA integrity_check (through
+Python's sqlite3 module on a host with no sqlite3 CLI).
+"""
+
+from __future__ import annotations
+
+import glob
+import json
+import os
+import shutil
+import sqlite3
+import subprocess
+import sys
+import tarfile
+from datetime import date
+from pathlib import Path
+
+LOCAL_KEEP = 3
+REMOTE_MIN_AGE = "30d"
+
+# g-env sits beside this checkout; G_ENV overrides that.
+WORKSPACE = Path(__file__).resolve().parents[2]
+G_ENV = os.environ.get("G_ENV") or os.environ.get("GENV_DIR") or next(
+    (str(p) for p in (WORKSPACE / "g-env", WORKSPACE / "genv") if p.exists()), str(WORKSPACE / "g-env"))
+
+
+def log(msg: str) -> None:
+    print(f"[g-backup] {msg}", flush=True)
+
+
+def backup_sqlite(src: Path, dst: Path) -> None:
+    if not src.exists():
+        raise FileNotFoundError(f"missing DB source: {src}")
+    src_conn = sqlite3.connect(f"file:{src}?mode=ro", uri=True)
+    dst_conn = sqlite3.connect(dst)
+    try:
+        src_conn.backup(dst_conn)
+    finally:
+        dst_conn.close()
+        src_conn.close()
+
+
+def load_config() -> dict:
+    instance = subprocess.run([str(Path(G_ENV) / "bin/g-instance")], capture_output=True, text=True,
+                              check=True).stdout.strip()
+    if not instance:
+        raise FileNotFoundError("no instance, so no backup.json to say what to back up")
+    return json.loads((Path(instance) / "backup.json").read_text())
+
+
+def run(cmd: list[str]) -> None:
+    log("+ " + " ".join(cmd))
+    subprocess.run(cmd, check=True)
+
+
+def main() -> None:
+    config = load_config()
+    backup_root = Path(config["root"])
+    remote, rclone_config = config["remote"], config["rclone_config"]
+    today = date.today().isoformat()
+    stage_dir = backup_root / "staging" / today
+    if stage_dir.exists():
+        shutil.rmtree(stage_dir)
+    stage_dir.mkdir(parents=True, exist_ok=True)
+
+    log(f"staging into {stage_dir}")
+
+    # directories, each under its name (an optional one, such as dated wages
+    # backups, is carried as-is when present)
+    for entry in config["dirs"]:
+        src = Path(entry["path"])
+        if not src.exists():
+            if entry.get("optional"):
+                continue
+            raise FileNotFoundError(f"missing dir: {src}")
+        run(["rsync", "-a", f"{src}/", str(stage_dir / entry["name"]) + "/"])
+
+    # sqlite DBs, snapshotted via the sqlite backup API (safe against a live writer)
+    db_dir = stage_dir / "db"
+    db_dir.mkdir(exist_ok=True)
+    for entry in config["sqlite"]:
+        src, dst = Path(entry["path"]), db_dir / entry["name"]
+        log(f"snapshotting {src} -> {dst}")
+        backup_sqlite(src, dst)
+
+    # tar the whole staged snapshot
+    backup_root.mkdir(parents=True, exist_ok=True)
+    tarball = backup_root / f"g-backup-{today}.tar.gz"
+    log(f"creating {tarball}")
+    with tarfile.open(tarball, "w:gz") as tf:
+        tf.add(stage_dir, arcname=today)
+
+    shutil.rmtree(stage_dir)
+
+    # ship it. --s3-no-check-bucket: a bucket-scoped R2 token has no
+    # ListBuckets/CreateBucket, so rclone's pre-upload bucket check must be skipped.
+    run([
+        "rclone", "copy", str(tarball), f"{remote}/",
+        "--config", rclone_config, "--s3-no-check-bucket",
+    ])
+
+    # prune remote beyond retention
+    run([
+        "rclone", "delete", remote, "--min-age", REMOTE_MIN_AGE,
+        "--config", rclone_config, "--s3-no-check-bucket",
+    ])
+
+    # keep last LOCAL_KEEP local tarballs
+    tarballs = sorted(glob.glob(str(backup_root / "g-backup-*.tar.gz")))
+    for old in tarballs[:-LOCAL_KEEP]:
+        log(f"pruning local {old}")
+        os.remove(old)
+
+    log(f"done: {tarball.name} ({tarball.stat().st_size} bytes)")
+
+
+if __name__ == "__main__":
+    try:
+        main()
+    except Exception as exc:  # noqa: BLE001 - systemd needs a clean non-zero exit
+        log(f"FAILED: {exc}")
+        sys.exit(1)

@@ -1,0 +1,12 @@
+export PATH="$HOME/.local/bin:$PATH"
+export IS_SANDBOX=1
+
+# The passport, found through g-env's resolver: the instance's .env, else the .env
+# in the g-env checkout, which is where the instance's push-secrets writes a
+# server's copy. Exported, like the Mac shell, so the tools started here see it.
+_g_passport=$("$HOME/.local/bin/g-instance" env 2>/dev/null)
+[[ -f "$_g_passport" ]] || _g_passport="$("$HOME/.local/bin/g-instance" framework 2>/dev/null)/.env"
+[[ -f "$_g_passport" ]] && set -a && source "$_g_passport" && set +a
+
+# Terminal window title: show running command
+preexec() { printf '\e]2;%s\a' "$1" }

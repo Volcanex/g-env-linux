@@ -1,0 +1,6 @@
+# Framework default: keepalives only. An instance replaces this whole file with its
+# env/ssh/config (hosts, identity files); see bootstrap.sh. Keys are never tracked here.
+
+Host *
+    ServerAliveInterval 60
+    ServerAliveCountMax 3
