@@ -1,0 +1,8 @@
+[Unit]
+Description=Spend spare Codex allowance on useful work
+
+[Service]
+Type=oneshot
+ExecStart=/usr/bin/python3 /home/gabriel/genv/bin/g-eburn tick
+KillMode=process
+Environment=PATH=/root/.local/bin:/usr/local/bin:/usr/bin:/bin
