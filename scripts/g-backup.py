@@ -135,10 +135,14 @@ def main() -> None:
     for entry in config.get("latest", []):
         ship_latest(entry, remote, rclone_config)
 
-    # prune remote beyond retention
+    # prune remote beyond retention. A `latest` dir keeps its newest `keep` by count
+    # instead: rclone keeps the source mtime, so if the app stopped dumping for 30
+    # days the age prune would delete every offsite copy it has.
+    keep_dirs = [arg for entry in config.get("latest", [])
+                 for arg in ("--exclude", f"/{entry['name']}/**")]
     run([
         "rclone", "delete", remote, "--min-age", REMOTE_MIN_AGE,
-        "--config", rclone_config, "--s3-no-check-bucket",
+        "--config", rclone_config, "--s3-no-check-bucket", *keep_dirs,
     ])
 
     # keep last LOCAL_KEEP local tarballs

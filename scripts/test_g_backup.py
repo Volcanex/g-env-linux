@@ -91,6 +91,8 @@ class BackupTest(unittest.TestCase):
         self.assertEqual(shipped, [f"copy {dumps / 'app-20261017.sql.gz'} r2:bucket/prefix/host/app/ {flags}"])
         deleted = [a.split()[1] for a in args if a.startswith('deletefile')]
         self.assertEqual(deleted, ['r2:bucket/prefix/host/app/app-20261014.sql.gz', 'r2:bucket/prefix/host/app/app-20261015.sql.gz'])
+        pruned = [a for a in args if a.startswith('delete ')]
+        self.assertEqual(pruned, [f"delete r2:bucket/prefix/host --min-age 30d {flags} --exclude /app/**"])
 
     def test_latest_with_no_match_fails(self):
         self.config['latest'] = [{'name': 'app', 'glob': str(self.tmp / 'none-*.gz'), 'keep': 7}]
