@@ -45,7 +45,7 @@ Force a sync now: `systemctl start genv-sync.service`
   instead when one exists. Private keys are never tracked here.
 - `systemd/genv-sync.service.template`: sync service (paths stamped by bootstrap).
 - `systemd/genv-sync.timer`: daily timer.
-- The root crontab runs the server-wide guidance mirror every five minutes (below).
+- Guidance mirroring runs daily through genv-sync; there is no mirror cron (below).
 - `scripts/post-sync.sh`: hook for post-sync tasks (extend as needed).
 - `scripts/pulse-cron-dispatch.py`: pulse cron dispatcher. It scans
   `brain/.pulse/crons/*.md`, matches schedules from frontmatter, and runs due crons
@@ -84,15 +84,11 @@ hand as copies in `/etc/systemd/system/`.
 
 ## Claude guidance mirroring
 
-Bootstrap, run as root, installs one root crontab line (marked `# g-env-mirror-claude`,
-which g-cron and the crons page show as its name) that runs g-env's
-`scripts/mirror-claude.py --server-wide --user-skills` every five minutes under `flock`.
-It replaces a line under the old `# genv-mirror-claude` marker and retires the older
-`genv-mirror-claude.timer`. Until bootstrap runs again, a host keeps its old line. The mirror
-picks up newly created nonignored instructions and registered worktrees. Existing
-relative links reflect content edits immediately. Discovery is bounded to depth
-three under g-env's siblings and the invoking user's home, and dependency and hidden
-trees are excluded except registered worktrees. Independent AGENTS.md files are
-preserved and reported. This mirrors files, not Claude hooks or MCP configuration.
-Inspect failures in `/var/log/g-env-mirror-claude.log` (`/var/log/genv-mirror-claude.log`
-on a host still running the old line).
+g-env's `bootstrap-base.sh` mirrors guidance (`scripts/mirror-claude.py --discover`), and
+genv-sync runs it daily. The five-minute root cron that used to run
+`mirror-claude.py --server-wide --user-skills` was retired on 2026-10-13. Bootstrap, run
+as root, now removes its line under either marker (`# g-env-mirror-claude`,
+`# genv-mirror-claude`) and the older `genv-mirror-claude.timer`, and installs nothing.
+For a one-off server-wide pass run `python3 <g-env>/scripts/mirror-claude.py --server-wide
+--user-skills`. The old cron's log is `/var/log/g-env-mirror-claude.log`. Independent AGENTS.md
+files are preserved and reported. This mirrors files, not Claude hooks or MCP configuration.

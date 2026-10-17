@@ -92,37 +92,22 @@ else
   echo "systemd not found, skipping timer install"
 fi
 
-# Keep guidance mirroring server-wide and persistent through root's crontab.
-# Install the replacement first, then retire the older systemd timer so the two
-# scanners cannot overlap. The marker limits edits to this managed cron entry,
-# and g-cron names the job after it. An entry under the old genv- marker is
-# replaced, not duplicated.
-if [[ "${EUID:-$(id -u)}" -eq 0 ]] && command -v crontab >/dev/null && command -v flock >/dev/null; then
-  CRON_MARKER='# g-env-mirror-claude'
-  LEGACY_MARKER='# genv-mirror-claude'
-  CRON_TMP="$(mktemp)"
-  CRONTAB="$(command -v crontab)"
-  FLOCK="$(command -v flock)"
-  PYTHON="$(command -v python3)"
-  printf -v MIRROR_ENTRY '*/5 * * * * %q -n %q %q %q --server-wide --user-skills >> %q 2>&1 %s' \
-    "$FLOCK" /run/lock/g-env-mirror-claude.lock "$PYTHON" \
-    "$G_ENV/scripts/mirror-claude.py" /var/log/g-env-mirror-claude.log "$CRON_MARKER"
-  { "$CRONTAB" -l 2>/dev/null | grep -vF -e "$CRON_MARKER" -e "$LEGACY_MARKER" || true
-    printf '%s\n' "$MIRROR_ENTRY"; } > "$CRON_TMP"
-  "$CRONTAB" "$CRON_TMP"
-  rm -f "$CRON_TMP"
-  echo "installed root cron: server-wide guidance mirror every five minutes"
-
-  if command -v systemctl >/dev/null; then
+# Guidance mirroring runs in g-env's bootstrap-base.sh, which genv-sync runs daily. The
+# five-minute root cron that used to do it was retired on 2026-10-13 (no cron jobs), so
+# remove its line under either marker and the older genv-mirror-claude.timer if present.
+if [[ "${EUID:-$(id -u)}" -eq 0 ]] && command -v crontab >/dev/null; then
+  if crontab -l 2>/dev/null | grep -qF -e '# g-env-mirror-claude' -e '# genv-mirror-claude'; then
+    CRON_TMP="$(mktemp)"
+    crontab -l | grep -vF -e '# g-env-mirror-claude' -e '# genv-mirror-claude' > "$CRON_TMP" || true
+    crontab "$CRON_TMP"
+    rm -f "$CRON_TMP"
+    echo "removed the retired guidance mirror cron"
+  fi
+  if command -v systemctl >/dev/null && [[ -e /etc/systemd/system/genv-mirror-claude.timer ]]; then
     systemctl disable --now genv-mirror-claude.timer >/dev/null 2>&1 || true
     rm -f /etc/systemd/system/genv-mirror-claude.service /etc/systemd/system/genv-mirror-claude.timer
     systemctl daemon-reload
   fi
-elif [[ "${EUID:-$(id -u)}" -ne 0 ]]; then
-  echo "guidance mirror cron skipped: run Linux bootstrap as root to manage root's crontab"
-else
-  echo "guidance mirror cron unavailable: install crontab and flock before bootstrapping"
-  exit 1
 fi
 
 echo
