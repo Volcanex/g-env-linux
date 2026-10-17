@@ -74,6 +74,30 @@ class BackupTest(unittest.TestCase):
         self.assertTrue(args[1].startswith('delete r2:bucket/prefix/host --min-age 30d'))
         self.assertFalse((self.tmp / 'out/staging' / day).exists())
 
+    def test_latest_ships_only_the_newest_and_keeps_the_newest_offsite(self):
+        dumps = self.tmp / 'dumps'
+        dumps.mkdir()
+        for day in ('20261015', '20261016', '20261017'):
+            (dumps / f'app-{day}.sql.gz').write_text(day)
+        listing = '\\n'.join(f'app-2026101{d}.sql.gz' for d in (4, 7, 5, 6))
+        executable(self.tmp / 'bin/rclone',
+                   f'#!/bin/sh\necho "$@" >> {self.tmp}/rclone.args\n[ "$1" = lsf ] && printf "{listing}\\n"\nexit 0\n')
+        self.config['latest'] = [{'name': 'app', 'glob': str(dumps / 'app-*.sql.gz'), 'keep': 2}]
+        self.write_config()
+        b.main()
+        args = (self.tmp / 'rclone.args').read_text().splitlines()
+        flags = f"--config {self.tmp / 'rclone.conf'} --s3-no-check-bucket"
+        shipped = [a for a in args if a.startswith('copy') and '/app/' in a]
+        self.assertEqual(shipped, [f"copy {dumps / 'app-20261017.sql.gz'} r2:bucket/prefix/host/app/ {flags}"])
+        deleted = [a.split()[1] for a in args if a.startswith('deletefile')]
+        self.assertEqual(deleted, ['r2:bucket/prefix/host/app/app-20261014.sql.gz', 'r2:bucket/prefix/host/app/app-20261015.sql.gz'])
+
+    def test_latest_with_no_match_fails(self):
+        self.config['latest'] = [{'name': 'app', 'glob': str(self.tmp / 'none-*.gz'), 'keep': 7}]
+        self.write_config()
+        with self.assertRaisesRegex(FileNotFoundError, 'nothing matches'):
+            b.main()
+
     def test_missing_required_dir_fails_before_shipping(self):
         self.config['dirs'][0]['path'] = str(self.tmp / 'gone')
         self.write_config()

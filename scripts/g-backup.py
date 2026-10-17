@@ -3,8 +3,11 @@
 
 What to carry is the instance's: `backup.json` in the instance (gp-core) that
 g-env's bin/g-instance names. It lists the directories (`optional` ones may be
-absent), the sqlite DBs, the local tarball root, the rclone config and the remote.
-With no instance or no list the run fails, so systemd shows it.
+absent), the sqlite DBs, the local tarball root, the rclone config and the remote,
+and `latest`: files an app already dumps locally (a glob each), of which only the
+newest is shipped, under <remote>/<name>/, keeping the newest `keep` there. With no
+instance or no list the run fails, so systemd shows it, and so does a `latest` glob
+that matches nothing.
 
 Runs as root, to read root-owned DBs and docker volumes. Flow: stage a dated
 snapshot -> tar.gz -> rclone copy to the remote -> prune remote (>30d) and local
@@ -69,6 +72,20 @@ def run(cmd: list[str]) -> None:
     subprocess.run(cmd, check=True)
 
 
+def ship_latest(entry: dict, remote: str, rclone_config: str) -> None:
+    files = sorted(glob.glob(entry["glob"]))
+    if not files:
+        raise FileNotFoundError(f"nothing matches {entry['glob']}")
+    dest = f"{remote}/{entry['name']}"
+    flags = ["--config", rclone_config, "--s3-no-check-bucket"]
+    run(["rclone", "copy", files[-1], f"{dest}/", *flags])
+    # Names sort by date, as the app writes them; keep the newest `keep` offsite.
+    listed = subprocess.run(["rclone", "lsf", "--files-only", dest, *flags],
+                            capture_output=True, text=True, check=True).stdout.split()
+    for old in sorted(listed)[:-entry["keep"]]:
+        run(["rclone", "deletefile", f"{dest}/{old}", *flags])
+
+
 def main() -> None:
     config = load_config()
     backup_root = Path(config["root"])
@@ -114,6 +131,9 @@ def main() -> None:
         "rclone", "copy", str(tarball), f"{remote}/",
         "--config", rclone_config, "--s3-no-check-bucket",
     ])
+
+    for entry in config.get("latest", []):
+        ship_latest(entry, remote, rclone_config)
 
     # prune remote beyond retention
     run([

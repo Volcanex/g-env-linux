@@ -76,7 +76,8 @@ hand as copies in `/etc/systemd/system/`.
   (directories, sqlite DBs, the local tarball root, the rclone config and remote) is
   the instance's `backup.json`, found through `g-instance`, and with no instance or
   no list the run fails. Snapshots go through `sqlite3.backup()`, never a plain `cp`
-  of a live db. It keeps the last 3 local tarballs, prunes remote objects older than
+  of a live db. A `latest` entry ships only the newest file an app already dumps
+  (a glob) to `<remote>/<name>/` and keeps the newest `keep` there. It keeps the last 3 local tarballs, prunes remote objects older than
   30 days, and exits non-zero on any failure so systemd marks the unit failed. The
   script's docstring has the restore command, and `scripts/test_g_backup.py` covers
   the contract.
