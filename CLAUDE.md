@@ -75,7 +75,8 @@ hand as copies in `/etc/systemd/system/`.
 - `scripts/g-backup.py` is the nightly offsite backup, run as root. What it carries
   (directories, sqlite DBs, the local tarball root, the rclone config and remote) is
   the instance's `backup.json`, found through `g-instance`, and with no instance or
-  no list the run fails. Snapshots go through `sqlite3.backup()`, never a plain `cp`
+  no list the run fails. A dir or DB marked `optional` may be absent, and the last log line
+  names any it skipped. Snapshots go through `sqlite3.backup()`, never a plain `cp`
   of a live db. A `latest` entry ships only the newest file an app already dumps
   (a glob) to `<remote>/<name>/` and keeps the newest `keep` there, which the 30-day prune leaves alone. It keeps the last `local_keep` local tarballs
   (default 3, never fewer than the one just shipped), prunes remote objects older than

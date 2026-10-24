@@ -2,8 +2,9 @@
 """Nightly offsite backup: the instance's directories and sqlite DBs -> an rclone remote.
 
 What to carry is the instance's: `backup.json` in the instance (gp-core) that
-g-env's bin/g-instance names. It lists the directories (`optional` ones may be
-absent), the sqlite DBs, the local tarball root, the rclone config and the remote,
+g-env's bin/g-instance names. It lists the directories and the sqlite DBs (an
+`optional` one may be absent, and the run names what it skipped), the local tarball
+root, the rclone config and the remote,
 and `latest`: files an app already dumps locally (a glob each), of which only the
 newest is shipped, under <remote>/<name>/, keeping the newest `keep` there. With no
 instance or no list the run fails, so systemd shows it, and so does a `latest` glob
@@ -102,10 +103,12 @@ def main() -> None:
 
     # directories, each under its name (an optional one, such as dated wages
     # backups, is carried as-is when present)
+    skipped = []
     for entry in config["dirs"]:
         src = Path(entry["path"])
         if not src.exists():
             if entry.get("optional"):
+                skipped.append(entry["name"])
                 continue
             raise FileNotFoundError(f"missing dir: {src}")
         run(["rsync", "-a", f"{src}/", str(stage_dir / entry["name"]) + "/"])
@@ -115,6 +118,11 @@ def main() -> None:
     db_dir.mkdir(exist_ok=True)
     for entry in config["sqlite"]:
         src, dst = Path(entry["path"]), db_dir / entry["name"]
+        # A paused or retired stack's DB may go; marking it optional keeps that from
+        # failing the whole night's backup.
+        if not src.exists() and entry.get("optional"):
+            skipped.append(entry["name"])
+            continue
         log(f"snapshotting {src} -> {dst}")
         backup_sqlite(src, dst)
 
@@ -154,7 +162,8 @@ def main() -> None:
         log(f"pruning local {old}")
         os.remove(old)
 
-    log(f"done: {tarball.name} ({tarball.stat().st_size} bytes)")
+    note = f"; skipped optional, not there: {', '.join(skipped)}" if skipped else ""
+    log(f"done: {tarball.name} ({tarball.stat().st_size} bytes){note}")
 
 
 if __name__ == "__main__":

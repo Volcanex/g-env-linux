@@ -9,7 +9,9 @@ import sqlite3
 import stat
 import tarfile
 import tempfile
+import io
 import unittest
+from contextlib import redirect_stdout
 from unittest.mock import patch
 
 HERE = Path(__file__).resolve().parent
@@ -123,6 +125,18 @@ class BackupTest(unittest.TestCase):
                 b.main()
             self.assertEqual(len(list(out.glob('g-backup-*.tar.gz'))), left)
         self.assertEqual(len(list(out.glob(f'g-backup-{b.date.today().isoformat()}.tar.gz'))), 1)
+
+    def test_optional_db_absent_is_named_and_a_required_one_still_fails(self):
+        self.config['sqlite'].append({'name': 'paused.db', 'path': str(self.tmp / 'gone.db'), 'optional': True})
+        self.write_config()
+        out = io.StringIO()
+        with patch.object(b, 'run', lambda cmd: None), redirect_stdout(out):
+            b.main()
+        self.assertIn('skipped optional, not there: wages, paused.db', out.getvalue())
+        self.config['sqlite'][-1].pop('optional')
+        self.write_config()
+        with patch.object(b, 'run', lambda cmd: None), self.assertRaisesRegex(FileNotFoundError, 'missing DB source'):
+            b.main()
 
 
 if __name__ == '__main__':
