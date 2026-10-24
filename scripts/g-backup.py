@@ -4,7 +4,9 @@
 What to carry is the instance's: `backup.json` in the instance (gp-core) that
 g-env's bin/g-instance names. It lists the directories and the sqlite DBs (an
 `optional` one may be absent, and the run names what it skipped), the local tarball
-root, the rclone config and the remote,
+root, the rclone config and the remote, `repos`: git checkouts carried as bundles of
+every ref, since a host's agents commit without pushing and those commits may exist
+nowhere else (tracked changes not yet committed ride beside each as a patch),
 and `latest`: files an app already dumps locally (a glob each), of which only the
 newest is shipped, under <remote>/<name>/, keeping the newest `keep` there. With no
 instance or no list the run fails, so systemd shows it, and so does a `latest` glob
@@ -21,7 +23,10 @@ Restore: rclone copy <remote>/g-backup-<date>.tar.gz <dest> --config <rclone_con
 --s3-no-check-bucket, or a bucket-scoped token gets a 403 on the bucket-exists
 preflight. Directories restore as plain trees under their names, and the DBs are
 ready-to-use sqlite files in db/. Check them with PRAGMA integrity_check (through
-Python's sqlite3 module on a host with no sqlite3 CLI).
+Python's sqlite3 module on a host with no sqlite3 CLI). A repo restores with
+`git clone repos/<name>.bundle <dir>`, then `git apply repos/<name>.uncommitted.patch`
+if there is one. A repo that will not bundle fails the run, but only after the rest
+has shipped.
 """
 
 from __future__ import annotations
@@ -60,6 +65,20 @@ def backup_sqlite(src: Path, dst: Path) -> None:
     finally:
         dst_conn.close()
         src_conn.close()
+
+
+def bundle_repo(src: Path, dest: Path, name: str) -> None:
+    """Every ref of a checkout as one bundle, and its uncommitted tracked changes as a patch."""
+    if not (src / ".git").exists():
+        # Without this, git would walk up and bundle whatever repo holds the directory.
+        raise FileNotFoundError(f"not a git checkout: {src}")
+    # Runs as root over checkouts other users own, which git refuses without safe.directory.
+    git = ["git", "-c", "safe.directory=*", "-C", str(src)]
+    subprocess.run([*git, "bundle", "create", str(dest / f"{name}.bundle"), "--all"],
+                   check=True, capture_output=True)
+    diff = subprocess.run([*git, "diff", "HEAD", "--binary"], check=True, capture_output=True).stdout
+    if diff:
+        (dest / f"{name}.uncommitted.patch").write_bytes(diff)
 
 
 def load_config() -> dict:
@@ -126,6 +145,26 @@ def main() -> None:
         log(f"snapshotting {src} -> {dst}")
         backup_sqlite(src, dst)
 
+    # git checkouts. One that will not bundle is named and fails the run at the end,
+    # so it never costs the night's copy of the data.
+    unbundled = []
+    repo_dir = stage_dir / "repos"
+    for entry in config.get("repos", []):
+        src = Path(entry["path"])
+        if not src.exists():
+            if entry.get("optional"):
+                skipped.append(entry["name"])
+                continue
+            raise FileNotFoundError(f"missing repo: {src}")
+        log(f"bundling {src}")
+        repo_dir.mkdir(exist_ok=True)
+        try:
+            bundle_repo(src, repo_dir, entry["name"])
+        except (OSError, subprocess.CalledProcessError) as exc:
+            detail = getattr(exc, "stderr", None) or b""
+            log(f"could not bundle {entry['name']}: {detail.decode(errors='replace').strip() or exc}")
+            unbundled.append(entry["name"])
+
     # tar the whole staged snapshot
     backup_root.mkdir(parents=True, exist_ok=True)
     tarball = backup_root / f"g-backup-{today}.tar.gz"
@@ -164,6 +203,8 @@ def main() -> None:
 
     note = f"; skipped optional, not there: {', '.join(skipped)}" if skipped else ""
     log(f"done: {tarball.name} ({tarball.stat().st_size} bytes){note}")
+    if unbundled:
+        raise RuntimeError(f"shipped, but could not bundle: {', '.join(unbundled)}")
 
 
 if __name__ == "__main__":

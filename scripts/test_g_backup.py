@@ -7,6 +7,7 @@ from pathlib import Path
 import shutil
 import sqlite3
 import stat
+import subprocess
 import tarfile
 import tempfile
 import io
@@ -125,6 +126,56 @@ class BackupTest(unittest.TestCase):
                 b.main()
             self.assertEqual(len(list(out.glob('g-backup-*.tar.gz'))), left)
         self.assertEqual(len(list(out.glob(f'g-backup-{b.date.today().isoformat()}.tar.gz'))), 1)
+
+    def git_repo(self, name, dirty):
+        repo = self.tmp / name
+        repo.mkdir()
+        env = {**os.environ, 'GIT_AUTHOR_NAME': 't', 'GIT_AUTHOR_EMAIL': 't@example.com',
+               'GIT_COMMITTER_NAME': 't', 'GIT_COMMITTER_EMAIL': 't@example.com'}
+        for args in (['init', '-q', '-b', 'main'], ['commit', '-q', '--allow-empty', '-m', 'unpushed work']):
+            subprocess.run(['git', '-C', str(repo), *args], check=True, capture_output=True, env=env)
+        (repo / 'f.txt').write_text('one\n')
+        for args in (['add', 'f.txt'], ['commit', '-q', '-m', 'add f']):
+            subprocess.run(['git', '-C', str(repo), *args], check=True, capture_output=True, env=env)
+        if dirty:
+            (repo / 'f.txt').write_text('one\ntwo\n')
+        return repo
+
+    def test_repos_carry_every_commit_and_uncommitted_changes(self):
+        self.config['repos'] = [{'name': 'app', 'path': str(self.git_repo('app', dirty=True))},
+                                {'name': 'clean', 'path': str(self.git_repo('clean', dirty=False))},
+                                {'name': 'moved', 'path': str(self.tmp / 'moved'), 'optional': True}]
+        self.write_config()
+        out = io.StringIO()
+        with patch.object(b, 'run', lambda cmd: None), redirect_stdout(out):
+            b.main()
+        self.assertIn('skipped optional, not there: wages, moved', out.getvalue())
+        with tarfile.open(next((self.tmp / 'out').glob('g-backup-*.tar.gz'))) as tf:
+            day = tf.getnames()[0].split('/')[0]
+            tf.extractall(self.tmp / 'restore', filter='data')
+        repos = self.tmp / 'restore' / day / 'repos'
+        clone = self.tmp / 'clone'
+        subprocess.run(['git', 'clone', '-q', str(repos / 'app.bundle'), str(clone)], check=True, capture_output=True)
+        log = subprocess.run(['git', '-C', str(clone), 'log', '--format=%s'],
+                             check=True, capture_output=True, text=True).stdout.split()
+        self.assertEqual(log, ['add', 'f', 'unpushed', 'work'])
+        subprocess.run(['git', '-C', str(clone), 'apply', str(repos / 'app.uncommitted.patch')], check=True)
+        self.assertEqual((clone / 'f.txt').read_text(), 'one\ntwo\n')
+        self.assertTrue((repos / 'clean.bundle').exists())
+        self.assertFalse((repos / 'clean.uncommitted.patch').exists())
+
+    def test_a_repo_that_will_not_bundle_fails_the_run_after_the_rest_ships(self):
+        # A plain directory inside another checkout: git alone would bundle the parent.
+        plain = self.git_repo('parent', dirty=False) / 'plain'
+        plain.mkdir()
+        self.config['repos'] = [{'name': 'plain', 'path': str(plain)}]
+        self.write_config()
+        calls = []
+        with patch.object(b, 'run', calls.append), redirect_stdout(io.StringIO()), \
+                self.assertRaisesRegex(RuntimeError, 'could not bundle: plain'):
+            b.main()
+        self.assertTrue(any(cmd[:2] == ['rclone', 'copy'] for cmd in calls))
+        self.assertEqual(len(list((self.tmp / 'out').glob('g-backup-*.tar.gz'))), 1)
 
     def test_optional_db_absent_is_named_and_a_required_one_still_fails(self):
         self.config['sqlite'].append({'name': 'paused.db', 'path': str(self.tmp / 'gone.db'), 'optional': True})

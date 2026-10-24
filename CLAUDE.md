@@ -77,7 +77,9 @@ hand as copies in `/etc/systemd/system/`.
   the instance's `backup.json`, found through `g-instance`, and with no instance or
   no list the run fails. A dir or DB marked `optional` may be absent, and the last log line
   names any it skipped. Snapshots go through `sqlite3.backup()`, never a plain `cp`
-  of a live db. A `latest` entry ships only the newest file an app already dumps
+  of a live db. A `repos` entry is a checkout carried as `repos/<name>.bundle` (every ref,
+  so unpushed commits too) plus `<name>.uncommitted.patch` for tracked changes; one that
+  will not bundle fails the run only after everything else has shipped. A `latest` entry ships only the newest file an app already dumps
   (a glob) to `<remote>/<name>/` and keeps the newest `keep` there, which the 30-day prune leaves alone. It keeps the last `local_keep` local tarballs
   (default 3, never fewer than the one just shipped), prunes remote objects older than
   30 days, and exits non-zero on any failure so systemd marks the unit failed. The
