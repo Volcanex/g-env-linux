@@ -56,7 +56,10 @@ Force a sync now: `systemctl start genv-sync.service`
   streak (`state/cron-streaks.json`). `--list` shows the cron files, and `--run NAME`
   runs one now. The brain, brain-tools and g-env are found beside this checkout, and
   `BRAIN_ROOT`, `BRAIN_TOOLS`, `G_ENV` and `G_AGENT_RUN` override them. Last-run times
-  are in `.pulse/state/cron-runs.json`.
+  are in `.pulse/state/cron-runs.json`. Schedules are read in UTC with cron's own rules:
+  the weekday field counts from Sunday as 0 (7 is Sunday too), day and month names
+  work, and with both day fields restricted either one matching is enough. A schedule
+  it cannot read fails that job once and leaves the other jobs running.
 - `claude/settings.local.linux.json`: default server Claude Code settings (copied to
   `~/.claude/settings.local.json` on first bootstrap, then owned locally).
 - `LICENSE`: GNU AGPL v3.0 only.

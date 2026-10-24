@@ -88,10 +88,16 @@ def parse_frontmatter(text):
     return fm, body
 
 
-def field_matches(expr, value, min_val, max_val):
+MONTHS = {m: i for i, m in enumerate("jan feb mar apr may jun jul aug sep oct nov dec".split(), 1)}
+WEEKDAYS = {d: i for i, d in enumerate("sun mon tue wed thu fri sat".split())}
+
+
+def field_matches(expr, value, min_val, max_val, names=None):
     """Return True if cron field expression matches integer value."""
     if expr == "*":
         return True
+    for name, number in (names or {}).items():
+        expr = re.sub(rf"\b{name}\b", str(number), expr, flags=re.I)
     result = set()
     for part in expr.split(","):
         if "/" in part:
@@ -114,17 +120,26 @@ def field_matches(expr, value, min_val, max_val):
 
 
 def schedule_matches(schedule, dt):
-    """Return True if 5-field cron schedule matches dt (minute precision)."""
+    """Return True if 5-field cron schedule matches dt (minute precision).
+
+    The weekday field counts as cron does, from Sunday as 0 (7 is Sunday too).
+    Python's weekday() counts from Monday, and reading it raw ran "1-5" Tuesday
+    to Saturday. With both day fields restricted either one matching is enough,
+    as in cron."""
     parts = schedule.split()
     if len(parts) != 5:
         return False
     minute, hour, dom, month, dow = parts
+    weekday = (dt.weekday() + 1) % 7
+    on_day = field_matches(dom, dt.day, 1, 31)
+    on_weekday = (field_matches(dow, weekday, 0, 7, WEEKDAYS)
+                  or (weekday == 0 and field_matches(dow, 7, 0, 7, WEEKDAYS)))
+    days = (on_day or on_weekday) if dom != "*" and dow != "*" else (on_day and on_weekday)
     return (
         field_matches(minute, dt.minute, 0, 59) and
         field_matches(hour,   dt.hour,   0, 23) and
-        field_matches(dom,    dt.day,    1, 31) and
-        field_matches(month,  dt.month,  1, 12) and
-        field_matches(dow,    dt.weekday() % 7, 0, 6)  # 0=Mon python -> 0=Sun cron not handled; good enough
+        field_matches(month,  dt.month,  1, 12, MONTHS) and
+        days
     )
 
 
@@ -362,7 +377,23 @@ def main():
             print(f"[dispatch] first sight: {name}, recorded, not running")
             continue
 
-        if not is_due(cron["schedule"], runs[name], now):
+        try:
+            due = is_due(cron["schedule"], runs[name], now)
+        except ValueError as e:
+            # One unreadable schedule used to raise out of this loop, so no job after
+            # it ran. Record it as a failure, which pages once, and carry on. A job
+            # already in a failure streak is not logged again every five minutes.
+            try:
+                failing = name in json.load(open(STREAKS_FILE))
+            except (OSError, ValueError):
+                failing = False
+            if not failing:
+                stamp = now_iso()
+                record_run(name, cron["role"], {"started": stamp, "finished": stamp, "duration_s": 0, "exit": 2,
+                                                "provider": "", "model": "", "result": "fail",
+                                                "summary": f"unreadable schedule {cron['schedule']!r}: {e}"})
+            continue
+        if not due:
             continue
         execute(cron, runs)
 

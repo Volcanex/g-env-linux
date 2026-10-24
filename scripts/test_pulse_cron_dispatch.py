@@ -137,6 +137,41 @@ class DispatchTest(unittest.TestCase):
         self.assertEqual(row['result'], 'fail')
         self.assertFalse((self.tmp / 'args').exists())
 
+    def test_weekday_field_counts_from_sunday_like_cron(self):
+        from datetime import datetime
+        monday, saturday, sunday = datetime(2026, 10, 26, 9), datetime(2026, 10, 31, 9), datetime(2026, 11, 1, 9)
+        self.assertTrue(d.schedule_matches('0 9 * * 1-5', monday))
+        self.assertFalse(d.schedule_matches('0 9 * * 1-5', saturday))
+        self.assertTrue(d.schedule_matches('0 9 * * 0', sunday))
+        self.assertTrue(d.schedule_matches('0 9 * * 7', sunday))
+        self.assertTrue(d.schedule_matches('0 9 * * 5-7', sunday))
+        self.assertTrue(d.schedule_matches('0 9 * * MON-FRI', monday))
+        self.assertFalse(d.schedule_matches('0 9 * * mon-fri', sunday))
+        self.assertTrue(d.schedule_matches('0 9 * oct-nov sun', sunday))
+
+    def test_both_day_fields_restricted_means_either_matches(self):
+        from datetime import datetime
+        self.assertTrue(d.schedule_matches('0 9 1 * 1', datetime(2026, 10, 26, 9)))   # a Monday, not the 1st
+        self.assertTrue(d.schedule_matches('0 9 1 * 1', datetime(2026, 11, 1, 9)))    # the 1st, a Sunday
+        self.assertFalse(d.schedule_matches('0 9 1 * 1', datetime(2026, 10, 27, 9)))  # neither
+        self.assertFalse(d.schedule_matches('0 9 1 * *', datetime(2026, 10, 26, 9)))
+
+    def test_unreadable_schedule_fails_once_and_later_jobs_still_run(self):
+        from datetime import datetime, timezone, timedelta
+        for name, schedule in (('a-bad', '0 9 * * funday'), ('b-good', '* * * * *')):
+            (self.tmp / 'crons' / f'{name}.md').write_text(
+                f'---\nname: {name}\nschedule: "{schedule}"\nrunner: agent\nrole: bulk\nenabled: true\n---\nbody\n')
+        earlier = (datetime.now(timezone.utc) - timedelta(minutes=10)).isoformat()
+        (self.tmp / 'cron-runs.json').write_text(json.dumps({'a-bad': earlier, 'b-good': earlier}))
+        with patch.object(d, 'LOCK_FILE', self.tmp / 'dispatch.lock'), patch('sys.argv', ['dispatch']):
+            d.main()
+            d.main()
+        rows = self.rows()
+        self.assertEqual([(r['name'], r['result']) for r in rows if r['name'] == 'a-bad'], [('a-bad', 'fail')])
+        self.assertIn('unreadable schedule', rows[0]['summary'])
+        self.assertIn(('b-good', 'ok'), [(r['name'], r['result']) for r in rows])
+        self.assertEqual(self.pages, [('error', 'pulse-cron:a-bad', False)])
+
     def test_legacy_claude_runner_is_accepted_and_load_crons_reads_role(self):
         (self.tmp / 'crons' / 'a.md').write_text('---\nname: a\nschedule: "0 5 * * *"\nrunner: claude\nrole: verify\nenabled: true\n---\nbody\n')
         (self.tmp / 'crons' / '_t.md').write_text('---\nname: t\n---\n')
