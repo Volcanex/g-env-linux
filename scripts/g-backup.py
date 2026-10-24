@@ -11,7 +11,9 @@ that matches nothing.
 
 Runs as root, to read root-owned DBs and docker volumes. Flow: stage a dated
 snapshot -> tar.gz -> rclone copy to the remote -> prune remote (>30d) and local
-(keep last 3). Exits non-zero on any failure so the systemd unit shows as failed.
+(keep the last `local_keep`, default 3: the remote already holds 30 days, so a host
+short of disk can keep just the newest). Exits non-zero on any failure so the systemd
+unit shows as failed.
 
 Restore: rclone copy <remote>/g-backup-<date>.tar.gz <dest> --config <rclone_config>
 --s3-no-check-bucket, then tar xzf. On R2 every rclone call needs
@@ -145,9 +147,10 @@ def main() -> None:
         "--config", rclone_config, "--s3-no-check-bucket", *keep_dirs,
     ])
 
-    # keep last LOCAL_KEEP local tarballs
+    # keep the last local_keep local tarballs; the one just shipped is always kept
+    keep = max(1, int(config.get("local_keep", LOCAL_KEEP)))
     tarballs = sorted(glob.glob(str(backup_root / "g-backup-*.tar.gz")))
-    for old in tarballs[:-LOCAL_KEEP]:
+    for old in tarballs[:-keep]:
         log(f"pruning local {old}")
         os.remove(old)
 

@@ -77,10 +77,20 @@ hand as copies in `/etc/systemd/system/`.
   the instance's `backup.json`, found through `g-instance`, and with no instance or
   no list the run fails. Snapshots go through `sqlite3.backup()`, never a plain `cp`
   of a live db. A `latest` entry ships only the newest file an app already dumps
-  (a glob) to `<remote>/<name>/` and keeps the newest `keep` there, which the 30-day prune leaves alone. It keeps the last 3 local tarballs, prunes remote objects older than
+  (a glob) to `<remote>/<name>/` and keeps the newest `keep` there, which the 30-day prune leaves alone. It keeps the last `local_keep` local tarballs
+  (default 3, never fewer than the one just shipped), prunes remote objects older than
   30 days, and exits non-zero on any failure so systemd marks the unit failed. The
   script's docstring has the restore command, and `scripts/test_g_backup.py` covers
   the contract.
+- `scripts/g-offload.py` moves cold files off the disk into R2, as root, from the
+  instance's `offload.json` (rules of root, glob, age and remote prefix, found like
+  backup.json). A matched file is copied with rclone, checked identical by size and hash
+  with `rclone check --one-way --combined`, and deleted only if it matched and has not
+  changed since it was listed. Symlinks and dot files never move. With no flags it is a
+  dry run that reports every rule, and `--apply` moves only rules marked enabled, so a
+  rule can be measured on the real disk first. Moves are indexed in
+  `<state>/<rule>.jsonl`, and `--restore NAME --match GLOB` copies files back.
+  `scripts/test_g_offload.py` runs it against a stand-in rclone.
 
 ## Claude guidance mirroring
 

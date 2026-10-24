@@ -111,6 +111,19 @@ class BackupTest(unittest.TestCase):
         with patch.dict(os.environ, {'FAKE_INSTANCE': ''}), self.assertRaisesRegex(FileNotFoundError, 'no instance'):
             b.main()
 
+    def test_local_keep_prunes_older_tarballs_but_never_the_newest(self):
+        out = self.tmp / 'out'
+        out.mkdir()
+        for day in ('2026-10-01', '2026-10-02', '2026-10-03'):
+            (out / f'g-backup-{day}.tar.gz').write_text('old')
+        for keep, left in ((2, 2), (0, 1)):
+            self.config['local_keep'] = keep
+            self.write_config()
+            with patch.object(b, 'run', lambda cmd: None):
+                b.main()
+            self.assertEqual(len(list(out.glob('g-backup-*.tar.gz'))), left)
+        self.assertEqual(len(list(out.glob(f'g-backup-{b.date.today().isoformat()}.tar.gz'))), 1)
+
 
 if __name__ == '__main__':
     unittest.main()
