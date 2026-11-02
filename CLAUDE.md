@@ -72,15 +72,20 @@ hand as copies in `/etc/systemd/system/`.
   user can no longer write it, so the unit hands the tree back with an
   `ExecStartPost` chown after each run. If pulse or reminder writes start failing,
   check ownership first.
-- `scripts/g-backup.py` is the nightly offsite backup, run as root. What it carries
-  (directories, sqlite DBs, the local tarball root, the rclone config and remote) is
-  the instance's `backup.json`, found through `g-instance`, and with no instance or
-  no list the run fails. Snapshots go through `sqlite3.backup()`, never a plain `cp`
-  of a live db. A `latest` entry ships only the newest file an app already dumps
-  (a glob) to `<remote>/<name>/` and keeps the newest `keep` there, which the 30-day prune leaves alone. It keeps the last 3 local tarballs, prunes remote objects older than
-  30 days, and exits non-zero on any failure so systemd marks the unit failed. The
-  script's docstring has the restore command, and `scripts/test_g_backup.py` covers
-  the contract.
+- `scripts/g-backup.py` is the nightly offsite backup, run as root: the whole host into an
+  encrypted restic repository (restic 0.17 or newer, which is not Ubuntu's apt version). The
+  instance's `backup.json`, found through `g-instance`, says what: `paths` (normally `/`) minus
+  `exclude`, one filesystem at a time plus every local disk mount, `sqlite.roots` (every SQLite
+  file found by header, copied through `sqlite3.backup()`, never a plain `cp` of a live db),
+  `postgres` (the host cluster) and `docker` (each database container), all dumped as streams,
+  `services` (restore and tags only), and `restic` (repository and credentials as `${NAME}`s
+  filled from the instance's `.env`, retention). With no instance or the old tarball format the run
+  fails. A failed item never stops the others, but the run exits non-zero at the end so systemd
+  marks the unit failed, and a running database container that `docker` does not dump is itself
+  a failure. It also writes `<root>/status.json`, prunes to the retention, checks the repository,
+  and restores its own facts snapshot every night to prove restore works. `status`, `snapshots`,
+  `restore` and `restic ...` subcommands are in its docstring along with the restore commands.
+  `scripts/test_g_backup.py` covers the contract with a fake restic.
 
 ## Claude guidance mirroring
 

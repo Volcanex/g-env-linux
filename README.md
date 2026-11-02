@@ -35,7 +35,7 @@ back on.
   CLAUDE.md or AGENTS.md gets its twin as a link without anyone asking.
 - `scripts/pulse-cron-dispatch.py` runs the brain's scheduled model crons through
   g-env's `g-agent-run`, and pages once when one starts failing.
-- `scripts/g-backup.py` takes the nightly offsite backup with rclone.
+- `scripts/g-backup.py` takes the nightly offsite backup of the whole host with restic.
 
 The units that run the dispatcher and the backup name a host's paths and user,
 so they live in the instance and are installed by hand as copies in
