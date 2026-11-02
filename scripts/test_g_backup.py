@@ -318,6 +318,14 @@ class BackupTest(unittest.TestCase):
         files = [a for a in self.backups() if 'files' in a][0]
         self.assertNotIn(str(self.db), Path(files[files.index('--exclude-file') + 1]).read_text().splitlines())
 
+    def test_a_db_deleted_after_the_search_is_a_warning_not_a_failure(self):
+        gone = str(self.tmp / 'scratch/gone.db')
+        with patch.object(b, 'find_sqlite', return_value=[gone]):
+            b.main([])
+        status = json.loads((self.tmp / 'out/status.json').read_text())
+        self.assertTrue(status['ok'])
+        self.assertIn('vanished', status['warnings'][0])
+
     def test_service_of_picks_the_longest_matching_path(self):
         run = b.Run({'root': str(self.tmp), 'restic': {}, 'services': {'a': ['/x'], 'b': ['/x/y']}}, {})
         self.assertEqual((run.service_of('/x/y/z.db'), run.service_of('/x/z.db'), run.service_of('/q')), ('b', 'a', None))

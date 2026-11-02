@@ -214,6 +214,13 @@ def backup_sqlite(src: Path, dst: Path, busy_seconds: float = SQLITE_BUSY_SECOND
                 os.chmod(path, owner.st_mode & 0o666)
 
 
+def size_or_zero(path: str) -> int:
+    try:
+        return os.path.getsize(path)
+    except OSError:
+        return 0
+
+
 def is_sqlite(path: str) -> bool:
     try:
         with open(path, "rb") as fh:
@@ -392,7 +399,7 @@ class Run:
             stage = self.root / "sqlite" / group
             shutil.rmtree(stage, ignore_errors=True)
             stage.mkdir(parents=True)
-            need = sum(os.path.getsize(p) for p in paths if os.path.exists(p))
+            need = sum(size_or_zero(p) for p in paths)
             if shutil.disk_usage(stage).free < need + (1 << 30):
                 self.fail(f"sqlite {group}", f"{need >> 20} MiB of copies will not fit in the free disk space")
                 continue
@@ -407,6 +414,10 @@ class Run:
                     if verdict != "ok":
                         self.warnings.append(f"sqlite {path}: quick_check says {verdict[:80]}")
                     copied.append(path)
+                except FileNotFoundError:
+                    # deleted between the search and the copy (scratch DBs come and go): not a failure
+                    dst.unlink(missing_ok=True)
+                    self.warnings.append(f"sqlite {path}: vanished before it could be copied")
                 except SqliteBusy as exc:
                     # the file snapshot carries the raw file instead: usually a browser profile
                     dst.unlink(missing_ok=True)
