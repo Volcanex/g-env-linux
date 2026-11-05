@@ -191,7 +191,28 @@ def run_gate(cmd):
     return "error", f"gate exit {r.returncode}: {text}", ""
 
 
-def run_cron(name, body, role, connectors=False, gate="", workdir=""):
+def pinned_providers(role, pin, extra_tools=""):
+    """A cron can pin one model and effort (`pin: claude:opus:low`) instead of letting the
+    value model choose. g-agent-run reads an alternate providers file from G_AGENT_PROVIDERS;
+    dropping its value key makes it use roles/effort as written. `extra_tools` adds named MCP
+    tools (read-only ones, never a whole server) to the connector allowlist for this job only."""
+    base = Path(G_ENV) / "context/providers.json"
+    cfg = json.load(open(base))
+    cfg.pop("value", None)
+    vendor, model, effort = (pin.split(":") + ["", "", ""])[:3]
+    cfg["roles"][role] = [f"{vendor}:{model}"]
+    if effort:
+        cfg.setdefault("effort", {})[role] = effort
+    cfg.setdefault("timeout_s", {})[role] = max(cfg.get("timeout_s", {}).get(role, 900), 1800)
+    if extra_tools:
+        cfg["connectors"] = list(cfg.get("connectors", [])) + [t.strip() for t in extra_tools.split(",") if t.strip()]
+    fd, path = tempfile.mkstemp(prefix="pulse-pin-", suffix=".json")
+    with os.fdopen(fd, "w") as f:
+        json.dump(cfg, f)
+    return path
+
+
+def run_cron(name, body, role, connectors=False, gate="", workdir="", pin="", extra_tools=""):
     """Run one job through g-agent-run. Returns the run-row dict (without name/role)."""
     started = datetime.now(timezone.utc)
     t0 = time.monotonic()
@@ -210,8 +231,13 @@ def run_cron(name, body, role, connectors=False, gate="", workdir=""):
             "--tools", "--sandbox", "danger-full-access", "--meta", meta_file]
     if connectors:
         argv.append("--connectors")
+    env, pin_file = None, None
+    if pin:
+        pin_file = pinned_providers(role, pin, extra_tools)
+        env = {**os.environ, "G_AGENT_PROVIDERS": pin_file}
+        argv.append("--claude-only" if pin.startswith("claude:") else "--allow-claude")
     try:
-        r = subprocess.run(argv, capture_output=True, text=True, timeout=JOB_TIMEOUT_S, cwd=str(PULSE_DIR))
+        r = subprocess.run(argv, capture_output=True, text=True, timeout=JOB_TIMEOUT_S, cwd=str(PULSE_DIR), env=env)
         exit_code, output, err = r.returncode, r.stdout, r.stderr
     except subprocess.TimeoutExpired:
         exit_code, output, err = -1, "", "timeout"
@@ -222,7 +248,7 @@ def run_cron(name, body, role, connectors=False, gate="", workdir=""):
         provider = json.load(open(meta_file)).get("provider") or ""
     except (OSError, ValueError):
         pass
-    for p in (prompt_file, meta_file):
+    for p in (prompt_file, meta_file) + ((pin_file,) if pin_file else ()):
         try:
             os.unlink(p)
         except OSError:
@@ -297,7 +323,7 @@ def load_crons():
             "enabled": fm.get("enabled", "false").lower() == "true",
             "connectors": fm.get("connectors", "false").lower() == "true", "body": body,
             "gate": fm.get("gate", ""), "workdir": fm.get("workdir", ""),
-            "inlet": fm.get("inlet", ""),
+            "inlet": fm.get("inlet", ""), "pin": fm.get("pin", ""), "extra_tools": fm.get("extra_tools", ""),
         })
     return out
 
@@ -329,7 +355,8 @@ def execute(cron, runs):
         row = {"started": attempt_time, "finished": attempt_time, "duration_s": 0, "exit": 2, "provider": "",
                "model": "", "result": "fail", "summary": "cron file has no role: frontmatter"}
     else:
-        row = run_cron(name, cron["body"], role, cron["connectors"], cron["gate"], cron["workdir"])
+        row = run_cron(name, cron["body"], role, cron["connectors"], cron["gate"], cron["workdir"],
+                       cron["pin"], cron["extra_tools"])
     runs[name] = attempt_time
     with open(RUNS_FILE, "w") as f:
         json.dump(runs, f, indent=2)
