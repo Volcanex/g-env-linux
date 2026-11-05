@@ -297,8 +297,27 @@ def load_crons():
             "enabled": fm.get("enabled", "false").lower() == "true",
             "connectors": fm.get("connectors", "false").lower() == "true", "body": body,
             "gate": fm.get("gate", ""), "workdir": fm.get("workdir", ""),
+            "inlet": fm.get("inlet", ""),
         })
     return out
+
+
+def check_inlet_drift(crons):
+    """An inlet marked live must have an enabled cron. On 2026-10-18 a session paused the
+    gmail cron and left re-enabling to a report nobody read, so mail went dark for 18 days.
+    Pausing an inlet now means setting its status off live too; anything else pages daily."""
+    for cron in crons:
+        inlet = cron.get("inlet")
+        if not inlet or cron["enabled"]:
+            continue
+        spec = PULSE_DIR / "inlets" / f"{inlet}.md"
+        if not spec.exists():
+            continue
+        fm, _ = parse_frontmatter(spec.read_text())
+        key = f"inlet-dark:{inlet}"
+        if fm.get("status", "") == "live":
+            page("error", f"inlet {inlet} is marked live but {cron['name']} is disabled; "
+                 f"re-enable it or set the inlet status to paused/retired", key)
 
 
 def execute(cron, runs):
@@ -349,7 +368,11 @@ def main():
         row = execute(match[0], runs)
         sys.exit(0 if row["result"] in ("ok", "noop") else 1)
 
-    for cron in load_crons():
+    crons = load_crons()
+    if now.minute < 5:
+        check_inlet_drift(crons)
+
+    for cron in crons:
         name = cron["name"]
         if not cron["enabled"] or cron["runner"] not in RUNNERS or not cron["schedule"]:
             continue
