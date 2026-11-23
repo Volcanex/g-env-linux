@@ -26,7 +26,10 @@ restore of the facts snapshot compared byte for byte, and `<root>/status.json`.
 A failed item never stops the others; the run exits non-zero at the end if any
 failed, so systemd shows it and the OnFailure pager fires. A DB container that
 nothing in `docker` dumps is an error too: its volume would otherwise be copied
-raw, mid-write. Needs restic 0.17 or newer (`--stdin-from-command` fails the
+raw, mid-write. A `docker` entry of kind `raw` with a `reason` declares one that
+needs no dump: a cache that writes its file by rename, or a container that runs
+a database image and holds no data. It is listed under `undumped` in status.json.
+Needs restic 0.17 or newer (`--stdin-from-command` fails the
 snapshot when the dump command does; Ubuntu's apt package is older).
 
 Credentials come from the passport (`g-instance env`) through `${NAME}` in
@@ -289,6 +292,7 @@ class Run:
         self.snapshots: list[dict] = []
         self.errors: list[str] = []
         self.warnings: list[str] = []
+        self.undumped: list[dict] = []
         self.services = config.get("services", {})
         self.mounts: list[tuple[str, str]] = []
 
@@ -448,6 +452,8 @@ class Run:
                                   entry["container"], entry.get("exclude"), user=entry.get("user", "postgres"))
                 elif entry["kind"] in ("mariadb", "mysql"):
                     self.mysql(entry)
+                elif entry["kind"] == "raw":
+                    self.raw(entry)
                 else:
                     self.fail(f"docker {entry['container']}", f"unknown kind {entry['kind']}")
             except Exception as exc:  # noqa: BLE001
@@ -479,6 +485,16 @@ class Run:
                   f'--single-transaction --routines --events --triggers')
         self.dump("mysql", f"{name}/all-databases", f"/dumps/mysql/{name}/all-databases.sql",
                   ["docker", "exec", name, "sh", "-c", script], [*svc, f"db:{name}/all"])
+
+    def raw(self, entry: dict) -> None:
+        """A database container the instance declares needs no dump. The reason is required, so the
+        choice is written down where the next reader of backup.json finds it."""
+        name, reason = entry["container"], str(entry.get("reason") or "").strip()
+        if not reason:
+            self.fail(f"docker {name}", "kind raw needs a `reason`: why this container is safe without a dump")
+            return
+        log(f"docker {name}: not dumped ({reason})")
+        self.undumped.append({"container": name, "reason": reason})
 
     def audit_db_containers(self, configured: set[str]) -> None:
         proc = subprocess.run(["docker", "ps", "--format", "{{.Names}} {{.Image}}"], capture_output=True, text=True)
@@ -541,7 +557,7 @@ class Run:
         ok = not self.errors
         status = {"ok": ok, "started": iso(started), "finished": iso(finished),
                   "seconds": round(finished - started), "last_success": iso(finished) if ok else previous.get("last_success"),
-                  "errors": self.errors, "warnings": self.warnings, "repo": repo,
+                  "errors": self.errors, "warnings": self.warnings, "undumped": self.undumped, "repo": repo,
                   "added_bytes": sum(s["added_bytes"] or 0 for s in self.snapshots), "snapshots": self.snapshots}
         tmp = path.with_suffix(".tmp")
         tmp.write_text(json.dumps(status, indent=1))

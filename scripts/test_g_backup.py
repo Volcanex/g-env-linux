@@ -237,6 +237,23 @@ class BackupTest(unittest.TestCase):
         with self.assertRaisesRegex(RuntimeError, 'cache'):
             b.main([])
 
+    def test_a_database_container_declared_raw_with_a_reason_passes_and_is_listed_in_status(self):
+        executable(self.tmp / 'bin/docker', '#!/bin/sh\n[ "$1" = ps ] && echo "cache redis:7"\nexit 0\n')
+        self.config['docker'] = [{'container': 'cache', 'kind': 'raw', 'reason': 'cache only, writes its file by rename'}]
+        self.write_config()
+        b.main([])
+        status = json.loads((self.tmp / 'out/status.json').read_text())
+        self.assertTrue(status['ok'])
+        self.assertEqual(status['undumped'], [{'container': 'cache', 'reason': 'cache only, writes its file by rename'}])
+        self.assertEqual(self.stdin_snapshots(), {})
+
+    def test_a_raw_container_without_a_reason_fails_the_run(self):
+        executable(self.tmp / 'bin/docker', '#!/bin/sh\n[ "$1" = ps ] && echo "cache redis:7"\nexit 0\n')
+        self.config['docker'] = [{'container': 'cache', 'kind': 'raw', 'reason': '  '}]
+        self.write_config()
+        with self.assertRaisesRegex(RuntimeError, 'reason'):
+            b.main([])
+
     def test_a_configured_mariadb_container_is_dumped_without_its_password_on_the_command_line(self):
         executable(self.tmp / 'bin/docker', '#!/bin/sh\n[ "$1" = ps ] && echo "wp-db mariadb:11"\n[ "$1" = exec ] && echo "-- sql"\nexit 0\n')
         self.config['docker'] = [{'container': 'wp-db', 'kind': 'mariadb', 'service': 'wp'}]

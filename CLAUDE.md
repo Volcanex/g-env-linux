@@ -82,7 +82,8 @@ hand as copies in `/etc/systemd/system/`.
   filled from the instance's `.env`, retention). With no instance or the old tarball format the run
   fails. A failed item never stops the others, but the run exits non-zero at the end so systemd
   marks the unit failed, and a running database container that `docker` does not dump is itself
-  a failure. It also writes `<root>/status.json`, prunes to the retention, checks the repository,
+  a failure. A `docker` entry of kind `raw` with a `reason` declares one that needs no dump (a
+  cache that writes its file by rename, a container that holds no data). It also writes `<root>/status.json`, prunes to the retention, checks the repository,
   and restores its own facts snapshot every night to prove restore works. `status`, `snapshots`,
   `restore` and `restic ...` subcommands are in its docstring along with the restore commands.
   `scripts/test_g_backup.py` covers the contract with a fake restic.
